@@ -53,6 +53,7 @@ func getEtcdShowSegments(cli *clientv3.Client, basePath string) *cobra.Command {
 
 			totalRC := int64(0)
 			healthy := 0
+			totalBinlogSize := int64(0)
 			for _, info := range segments {
 
 				if info.State != commonpb.SegmentState_Dropped {
@@ -62,7 +63,8 @@ func getEtcdShowSegments(cli *clientv3.Client, basePath string) *cobra.Command {
 				}
 				switch format {
 				case "table":
-					printSegmentInfo(info, detail)
+					binlogSize := printSegmentInfo(info, detail)
+					totalBinlogSize += binlogSize
 				case "line":
 					fmt.Printf("SegmentID:%d State: %s, Row Count:%d\n", info.ID, info.State.String(), info.NumOfRows)
 				}
@@ -70,6 +72,9 @@ func getEtcdShowSegments(cli *clientv3.Client, basePath string) *cobra.Command {
 			}
 
 			fmt.Printf("--- Total Segments: %d , row count: %d\n", healthy, totalRC)
+			if totalBinlogSize != 0 {
+				fmt.Printf("--- TotalBinlogSize: %d\n", totalBinlogSize)
+			}
 			return nil
 		},
 	}
@@ -419,7 +424,7 @@ const (
 	tsPrintFormat = "2006-01-02 15:04:05.999 -0700"
 )
 
-func printSegmentInfo(info *datapb.SegmentInfo, detailBinlog bool) {
+func printSegmentInfo(info *datapb.SegmentInfo, detailBinlog bool) int64 {
 	fmt.Println("================================================================================")
 	fmt.Printf("Segment ID: %d\n", info.ID)
 	fmt.Printf("Segment State:%v\n", info.State)
@@ -444,6 +449,7 @@ func printSegmentInfo(info *datapb.SegmentInfo, detailBinlog bool) {
 	fmt.Printf("Binlog Nums %d\tStatsLog Nums: %d\tDeltaLog Nums:%d\n",
 		countBinlogNum(info.Binlogs), countBinlogNum(info.Statslogs), countBinlogNum(info.Deltalogs))
 
+	binlogSize := int64(0)
 	if detailBinlog {
 		fmt.Println("**************************************")
 		fmt.Println("Binlogs:")
@@ -453,6 +459,7 @@ func printSegmentInfo(info *datapb.SegmentInfo, detailBinlog bool) {
 		for _, log := range info.Binlogs {
 			fmt.Printf("Field %d:\n", log.FieldID)
 			for _, binlog := range log.Binlogs {
+				binlogSize += binlog.LogSize
 				fmt.Printf("Path: %s\n", binlog.LogPath)
 				tf, _ := ParseTS(binlog.TimestampFrom)
 				tt, _ := ParseTS(binlog.TimestampTo)
@@ -469,6 +476,9 @@ func printSegmentInfo(info *datapb.SegmentInfo, detailBinlog bool) {
 		})
 		for _, log := range info.Statslogs {
 			fmt.Printf("Field %d: %v\n", log.FieldID, log.Binlogs)
+			for _, binlog := range log.Binlogs {
+				binlogSize += binlog.LogSize
+			}
 		}
 
 		fmt.Println("**************************************")
@@ -477,11 +487,15 @@ func printSegmentInfo(info *datapb.SegmentInfo, detailBinlog bool) {
 			for _, l := range log.Binlogs {
 				fmt.Printf("Entries: %d From: %v - To: %v\n", l.EntriesNum, l.TimestampFrom, l.TimestampTo)
 				fmt.Printf("Path: %v\n", l.LogPath)
+				binlogSize += l.LogSize
 			}
 		}
+
+		fmt.Println("All binlog size", binlogSize)
 	}
 
 	fmt.Println("================================================================================")
+	return binlogSize
 }
 
 func countBinlogNum(fbl []*datapb.FieldBinlog) int {
